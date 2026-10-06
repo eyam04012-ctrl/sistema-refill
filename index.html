@@ -89,7 +89,11 @@ function humanError(e){
   if(m.includes('REFILL_RECIENTE')) return 'Este vaso acaba de registrar un refill. Espera unos segundos.';
   if(m.includes('SIN_PERMISO')) return 'Tu usuario no tiene permiso para esta acción.';
   if(m.includes('QR_NO_VALIDO')) return 'QR no válido.';
-  return m||'Ocurrió un error.';
+  if(m.includes('DEMASIADOS_INTENTOS')) return 'Demasiados intentos. Espera unos minutos e inténtalo de nuevo.';
+  if(m.includes('DEMASIADAS_SOLICITUDES') || m.includes('DEMASIADAS_OPERACIONES')) return 'Se alcanzó el límite temporal de seguridad. Espera un momento.';
+  if(m.includes('ORIGEN_NO_PERMITIDO')) return 'Acceso bloqueado por seguridad.';
+  if(m.includes('OPERACION_NO_DISPONIBLE') || m.includes('ERROR_INTERNO')) return 'La operación no está disponible en este momento.';
+  return 'Ocurrió un error.';
 }
 async function api(payload,needSession=true){
   const headers={'content-type':'application/json'};
