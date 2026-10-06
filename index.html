@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+  <meta name="theme-color" content="#111827">
+  <title>Sistema Refill</title>
+  <style>
+    :root{--bg:#f4f5f7;--card:#fff;--text:#111827;--muted:#6b7280;--ok:#15803d;--okbg:#dcfce7;--bad:#b91c1c;--badbg:#fee2e2;--blue:#1d4ed8;--line:#e5e7eb}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font-family:Arial,Helvetica,sans-serif;min-height:100vh}
+    .wrap{width:min(520px,100%);margin:auto;padding:18px}
+    .brand{text-align:center;font-size:14px;font-weight:800;letter-spacing:.08em;color:var(--muted);margin:8px 0 18px}
+    .card{background:var(--card);border-radius:20px;padding:22px;box-shadow:0 8px 28px #0001}
+    .serie{text-align:center;font-size:36px;font-weight:900;margin:2px 0 12px}
+    .status{text-align:center;font-weight:900;padding:14px;border-radius:14px;margin-bottom:18px}
+    .ok{background:var(--okbg);color:var(--ok)}
+    .bad{background:var(--badbg);color:var(--bad)}
+    .saldo{text-align:center;font-size:68px;font-weight:900;line-height:1}
+    .label{text-align:center;color:var(--muted);margin:6px 0 18px}
+    .title{font-size:24px;font-weight:900;margin-bottom:8px}
+    .small{color:var(--muted);font-size:14px;line-height:1.45}
+    input,button{width:100%;padding:15px;border-radius:13px;font-size:17px;margin-top:10px}
+    input{border:1px solid #d1d5db;background:#fff}
+    button{border:0;font-weight:900;color:#fff;background:#111827;cursor:pointer}
+    button:disabled{opacity:.45;cursor:not-allowed}
+    .ref{background:var(--ok);font-size:20px}
+    .pay{background:var(--blue)}
+    .ghost{background:#e5e7eb;color:#111827}
+    .meta{border-top:1px solid var(--line);margin-top:16px;padding-top:14px;color:var(--muted);font-size:14px;text-align:center}
+    .msg{display:none;padding:12px;border-radius:12px;margin-bottom:12px;text-align:center;font-weight:800}
+    .hidden{display:none!important}
+    .loader{text-align:center;color:var(--muted);padding:28px 0}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">SISTEMA DE VASOS REFILL</div>
+  <div id="msg" class="msg"></div>
+
+  <div id="missing" class="card hidden">
+    <div class="title">QR requerido</div>
+    <div class="small">Abre esta página escaneando el QR de un vaso.</div>
+  </div>
+
+  <div id="login" class="card hidden">
+    <div class="title">Acceso de personal</div>
+    <div class="small">La sesión queda guardada en este navegador durante el turno.</div>
+    <input id="usuario" placeholder="Usuario" autocomplete="username">
+    <input id="pin" type="password" inputmode="numeric" placeholder="PIN" autocomplete="current-password">
+    <button onclick="login()">INICIAR SESIÓN</button>
+  </div>
+
+  <div id="loading" class="card hidden"><div class="loader">Consultando vaso…</div></div>
+
+  <div id="vaso" class="card hidden">
+    <div id="serie" class="serie">—</div>
+    <div id="status" class="status bad">—</div>
+    <div id="saldo" class="saldo">0</div>
+    <div id="saldoLabel" class="label">refills disponibles</div>
+    <button id="btnRefill" class="ref hidden" onclick="accion('refill')">REGISTRAR REFILL</button>
+    <button id="btnCharge" class="pay hidden" onclick="accion('charge')">CARGAR PLAN</button>
+    <div id="meta" class="meta"></div>
+    <button class="ghost" onclick="logout()">Cerrar sesión</button>
+  </div>
+</div>
+
+<script>
+const API='https://wbaivnzyixiaoiwwdjpd.supabase.co/functions/v1/refill-app';
+const CUP_TOKEN=new URLSearchParams(location.search).get('t')||'';
+let busy=false,state=null;
+const $=id=>document.getElementById(id);
+
+function show(id){
+  ['missing','login','loading','vaso'].forEach(x=>$(x).classList.toggle('hidden',x!==id));
+}
+function message(t,kind='bad'){
+  const el=$('msg');
+  el.textContent=t;
+  el.className='msg '+kind;
+  el.style.display='block';
+  if(kind==='ok') setTimeout(()=>el.style.display='none',2200);
+}
+function humanError(e){
+  const m=String(e||'');
+  if(m.includes('USUARIO_O_PIN_INCORRECTO')) return 'Usuario o PIN incorrecto.';
+  if(m.includes('SESION_REQUERIDA')) return 'La sesión venció. Inicia sesión nuevamente.';
+  if(m.includes('SIN_REFILLS')) return 'Este vaso ya no tiene refills.';
+  if(m.includes('REFILL_RECIENTE')) return 'Este vaso acaba de registrar un refill. Espera unos segundos.';
+  if(m.includes('SIN_PERMISO')) return 'Tu usuario no tiene permiso para esta acción.';
+  if(m.includes('QR_NO_VALIDO')) return 'QR no válido.';
+  return m||'Ocurrió un error.';
+}
+async function api(payload,needSession=true){
+  const headers={'content-type':'application/json'};
+  if(needSession){
+    const s=localStorage.getItem('refill_session');
+    if(s) headers['x-session-token']=s;
+  }
+  const r=await fetch(API,{method:'POST',headers,body:JSON.stringify(payload)});
+  const j=await r.json().catch(()=>({error:'RESPUESTA_INVALIDA'}));
+  if(!r.ok) throw new Error(j.error||('HTTP '+r.status));
+  return j;
+}
+async function init(){
+  if(!CUP_TOKEN){show('missing');return;}
+  if(!localStorage.getItem('refill_session')){show('login');return;}
+  await cargar();
+}
+async function login(){
+  const usuario=$('usuario').value.trim();
+  const pin=$('pin').value.trim();
+  if(!usuario||!pin){message('Captura usuario y PIN.');return;}
+  show('loading');
+  try{
+    const j=await api({action:'login',usuario,pin},false);
+    localStorage.setItem('refill_session',j.sessionToken);
+    await cargar();
+  }catch(e){show('login');message(humanError(e.message));}
+}
+async function cargar(){
+  show('loading');
+  try{
+    render(await api({action:'state',t:CUP_TOKEN}));
+  }catch(e){
+    if(String(e.message).includes('SESION_REQUERIDA')){
+      localStorage.removeItem('refill_session');
+      show('login');
+    }else{
+      show('vaso');
+      message(humanError(e.message));
+    }
+  }
+}
+function render(s){
+  state=s;
+  show('vaso');
+  $('serie').textContent=s.serie;
+  const st=$('status');
+  st.className='status';
+  if(s.estadoVaso!=='ACTIVO'){st.textContent='VASO '+s.estadoVaso;st.classList.add('bad');}
+  else if(s.modo==='ILIMITADO'){st.textContent='REFILL ILIMITADO';st.classList.add('ok');}
+  else if(s.saldo>0){st.textContent='AUTORIZADO';st.classList.add('ok');}
+  else{st.textContent='SIN REFILLS';st.classList.add('bad');}
+
+  if(s.modo==='ILIMITADO'){
+    $('saldo').textContent='∞';
+    $('saldoLabel').textContent='plan ilimitado vigente';
+  }else{
+    $('saldo').textContent=String(s.saldo);
+    $('saldoLabel').textContent='refills disponibles';
+  }
+
+  $('btnRefill').classList.toggle('hidden',!s.puedeRefill);
+  $('btnCharge').classList.toggle('hidden',!s.puedeCobrar);
+  $('btnRefill').disabled=busy||!s.autorizado;
+  $('btnCharge').disabled=busy;
+  $('btnCharge').textContent='CARGAR '+(s.planDefaultNombre||s.planDefaultId)+(s.planDefaultPrecio>0?' · $'+s.planDefaultPrecio:'');
+  $('meta').innerHTML='Usuario: <b>'+esc(s.usuarioId)+'</b> · '+esc(s.rol);
+}
+async function accion(action){
+  if(busy)return;
+  busy=true;
+  if(state)render(state);
+  try{
+    const j=await api({action,t:CUP_TOKEN,request_id:crypto.randomUUID()});
+    busy=false;
+    render(j);
+    message(action==='refill'?'✓ Refill registrado.':'✓ Plan cargado.','ok');
+  }catch(e){
+    busy=false;
+    if(state)render(state);
+    message(humanError(e.message));
+  }
+}
+async function logout(){
+  try{await api({action:'logout'});}catch(e){}
+  localStorage.removeItem('refill_session');
+  show('login');
+}
+function esc(s){
+  return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
+}
+init();
+</script>
+</body>
+</html>
